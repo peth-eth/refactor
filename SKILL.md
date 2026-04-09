@@ -1,6 +1,6 @@
 ---
 name: refactor
-description: Maintenance-day runner — runs jscpd, knip, eslint plugins, dependency checks, and codebase health scans, then fixes issues. Use when paying down tech debt or doing periodic cleanup.
+description: Maintenance-day runner — runs jscpd, knip/vulture, ESLint/Biome/ruff, dependency checks, and codebase health scans, then fixes issues. Language-agnostic: detects JS/TS vs Python and the right linter. Use when paying down tech debt or doing periodic cleanup.
 ---
 
 You are a codebase maintenance specialist. You run automated tools, triage the output, and fix issues — all in one pass. You work autonomously, fixing what's safe to fix and flagging what needs human judgment.
@@ -34,20 +34,47 @@ This keeps the token budget clean for the actual work. Only proceed to Phase 1 a
 
 ## Phase 1: Automated scans
 
-Run all of these in parallel, then aggregate results:
+**First, detect the project language and toolchain:**
+
+- **Python project:** `pyproject.toml`, `setup.py`, or `requirements.txt` present (and no `package.json`)
+- **JS/TS project:** `package.json` present
+- **Linter detection (JS/TS only):** if `biome.json` or `biome.jsonc` exists → Biome; otherwise → ESLint
+
+Then run the appropriate scan set in parallel:
+
+### JS/TS project
 
 ```bash
-# Code duplication — threshold 10 lines, skip node_modules/dist
-npx jscpd src/ src-tauri/src/ --min-lines 10 --reporters consoleFull --ignore "node_modules,dist,.git,target" 2>&1 | tail -80
+# Code duplication — threshold 10 lines
+npx jscpd src/ --min-lines 10 --reporters consoleFull --ignore "node_modules,dist,.git" 2>&1 | tail -80
 
 # Dead code / unused exports
 npx knip --no-progress 2>&1 | head -120
 
-# ESLint — focus on fixable issues
+# Linter — Biome if configured, otherwise ESLint
+# If biome.json exists:
+npx biome check src/ 2>&1 | tail -80
+# Otherwise:
 npx eslint src/ --format compact --quiet 2>&1 | tail -80
 
 # Dependency freshness
 npm outdated 2>&1 | head -40
+```
+
+### Python project
+
+```bash
+# Linting + formatting violations
+ruff check . 2>&1 | head -80
+
+# Dead code — unused functions, classes, variables, imports
+vulture . --min-confidence 80 2>&1 | head -80
+
+# Code duplication
+npx jscpd . --min-lines 10 --reporters consoleFull --ignore ".git,__pycache__,.venv,venv" 2>&1 | tail -80
+
+# Dependency freshness
+pip list --outdated 2>&1 | head -40
 ```
 
 Summarize findings as a numbered list with severity (FIX / CONSIDER / INFO). Fix FIX-level items immediately. Ask about CONSIDER items only if they involve deleting public API or changing behavior.
@@ -100,8 +127,8 @@ Scan for code that can be modernized:
 Work through findings by severity:
 
 1. **Auto-fix safe items** (no behavior change):
-   - Remove dead imports/exports flagged by knip (verify each one)
-   - Apply eslint --fix for auto-fixable rules
+   - Remove dead imports/exports flagged by knip or vulture (verify each one)
+   - Apply `eslint --fix` or `biome check --write` for auto-fixable rules; or `ruff check --fix` for Python
    - Remove commented-out code blocks
    - Fix import ordering
 
